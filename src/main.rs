@@ -28,6 +28,8 @@ enum Commands {
     Add { url: String },
     /// List entries for a feed
     Entries { feed_id: String },
+    /// Sync all feeds
+    SyncAll,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -41,6 +43,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Feeds { id: None } => handle_list_feeds(&core, io::stdout())?,
         Commands::Add { url } => handle_add_feed(&core, url, io::stdout()).await?,
         Commands::Entries { feed_id } => handle_list_entries(&core, &feed_id, io::stdout())?,
+        Commands::SyncAll => handle_sync_all(&core, io::stdout()).await?,
     }
 
     Ok(())
@@ -97,6 +100,15 @@ async fn handle_add_feed<S: Storage, F: Fetcher>(
 ) -> anyhow::Result<()> {
     let feed = core.add_feed(url).await?;
     writeln!(out, "added feed {} ({})", feed.id, feed.url)?;
+    Ok(())
+}
+
+async fn handle_sync_all<S: Storage, F: Fetcher>(
+    core: &Core<S, F>,
+    mut out: impl Write,
+) -> anyhow::Result<()> {
+    core.sync_all().await?;
+    writeln!(out, "all feeds synced")?;
     Ok(())
 }
 
@@ -355,5 +367,13 @@ mod tests {
         handle_list_feeds(&mock_core(), &mut buf).unwrap();
         let output = String::from_utf8(buf).unwrap();
         assert_eq!(output, golden("list_feeds.txt"));
+    }
+
+    #[tokio::test]
+    async fn sync_all_output() {
+        let mut buf = Vec::new();
+        handle_sync_all(&mock_core(), &mut buf).await.unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert_eq!(output, golden("sync_all.txt"));
     }
 }
