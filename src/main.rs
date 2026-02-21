@@ -1,7 +1,14 @@
 use std::io::{self, Write};
 
+use chrono::DateTime;
 use clap::{Parser, Subcommand};
 use seycore::{http::FeedFetcher, sqlite::Store, Core, Fetcher, Storage};
+
+fn format_timestamp(ts: u64) -> String {
+    DateTime::from_timestamp(ts as i64, 0)
+        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+        .unwrap_or_else(|| ts.to_string())
+}
 
 #[derive(Parser)]
 #[command(name = "seymour")]
@@ -71,14 +78,15 @@ fn handle_describe_feed<S: Storage, F: Fetcher>(
         "Description",
         feed.description.as_deref().unwrap_or(&none)
     )?;
+    let last_synced = feed.last_synced_at.map(format_timestamp);
     writeln!(
         out,
         "{:>12}: {}",
         "Last Synced",
-        feed.last_synced_at.as_deref().unwrap_or(&none)
+        last_synced.as_deref().unwrap_or(&none)
     )?;
-    writeln!(out, "{:>12}: {}", "Created", feed.created_at)?;
-    writeln!(out, "{:>12}: {}", "Updated", feed.updated_at)?;
+    writeln!(out, "{:>12}: {}", "Created", format_timestamp(feed.created_at))?;
+    writeln!(out, "{:>12}: {}", "Updated", format_timestamp(feed.updated_at))?;
     Ok(())
 }
 
@@ -104,7 +112,7 @@ fn handle_list_entries<S: Storage, F: Fetcher>(
             vec![
                 e.id.clone(),
                 e.title.clone(),
-                e.publish_time.clone().unwrap_or_default(),
+                e.publish_time.map(format_timestamp).unwrap_or_default(),
                 e.link.clone(),
             ]
         })
@@ -156,11 +164,10 @@ fn write_table(headers: &[&str], rows: &[Vec<String>], mut out: impl Write) -> i
         .iter()
         .enumerate()
         .map(|(i, h)| {
-            let val = truncate(h, col_widths[i]);
             if i == last {
-                val
+                h.to_string()
             } else {
-                format!("{:<width$}", val, width = col_widths[i])
+                format!("{:<width$}", truncate(h, col_widths[i]), width = col_widths[i])
             }
         })
         .collect();
@@ -176,11 +183,10 @@ fn write_table(headers: &[&str], rows: &[Vec<String>], mut out: impl Write) -> i
             .iter()
             .enumerate()
             .map(|(i, cell)| {
-                let val = truncate(cell, col_widths[i]);
                 if i == last {
-                    val
+                    cell.clone()
                 } else {
-                    format!("{:<width$}", val, width = col_widths[i])
+                    format!("{:<width$}", truncate(cell, col_widths[i]), width = col_widths[i])
                 }
             })
             .collect();
@@ -193,7 +199,7 @@ fn write_table(headers: &[&str], rows: &[Vec<String>], mut out: impl Write) -> i
 #[cfg(test)]
 mod tests {
     use super::*;
-    use seycore::{Error, Feed, FeedEntry};
+    use seycore::{Error, Feed, FeedEntry, RemoteEntry, RemoteFeed};
     use std::path::PathBuf;
 
     struct MockStore {
@@ -210,8 +216,8 @@ mod tests {
                         title: Some("Example Blog".into()),
                         description: Some("A blog about things".into()),
                         last_synced_at: None,
-                        created_at: "2026-01-01 00:00:00".into(),
-                        updated_at: "2026-01-01 00:00:00".into(),
+                        created_at: 1767225600, // 2026-01-01 00:00:00 UTC
+                        updated_at: 1767225600,
                     },
                     Feed {
                         id: "00000000-0000-0000-0000-000000000002".into(),
@@ -219,8 +225,8 @@ mod tests {
                         title: Some("Another Blog".into()),
                         description: None,
                         last_synced_at: None,
-                        created_at: "2026-01-02 00:00:00".into(),
-                        updated_at: "2026-01-02 00:00:00".into(),
+                        created_at: 1767312000, // 2026-01-02 00:00:00 UTC
+                        updated_at: 1767312000,
                     },
                 ],
             }
@@ -246,6 +252,10 @@ mod tests {
             }
         }
 
+        fn update_feed(&self, _feed_id: &str, _remote: &RemoteFeed, _entries: &[RemoteEntry]) -> Result<(), Error> {
+            Ok(())
+        }
+
         fn list_entries(&self, feed_id: &str) -> Result<Vec<FeedEntry>, Error> {
             if feed_id == "00000000-0000-0000-0000-000000000001" {
                 Ok(vec![
@@ -256,8 +266,8 @@ mod tests {
                         description: "Description of first post".into(),
                         guid: "guid-0001".into(),
                         link: "https://example.com/posts/1".into(),
-                        created_at: "2026-01-10 00:00:00".into(),
-                        publish_time: Some("2026-01-10 12:00:00".into()),
+                        created_at: 1768003200, // 2026-01-10 00:00:00 UTC
+                        publish_time: Some(1768046400), // 2026-01-10 12:00:00 UTC
                     },
                     FeedEntry {
                         id: "entry-0002".into(),
@@ -266,8 +276,8 @@ mod tests {
                         description: "Description of second post".into(),
                         guid: "guid-0002".into(),
                         link: "https://example.com/posts/2".into(),
-                        created_at: "2026-01-11 00:00:00".into(),
-                        publish_time: Some("2026-01-11 08:30:00".into()),
+                        created_at: 1768089600, // 2026-01-11 00:00:00 UTC
+                        publish_time: Some(1768120200), // 2026-01-11 08:30:00 UTC
                     },
                 ])
             } else {
@@ -284,8 +294,23 @@ mod tests {
             .unwrap_or_else(|e| panic!("failed to read golden file {}: {e}", path.display()))
     }
 
-    fn mock_core() -> Core<MockStore, FeedFetcher> {
-        Core::new(MockStore::default(), FeedFetcher {})
+    struct MockFetcher {}
+
+    impl Fetcher for MockFetcher {
+        async fn fetch(&self, _url: &str) -> Result<(RemoteFeed, Vec<RemoteEntry>), Error> {
+            Ok((
+                RemoteFeed {
+                    url: "https://example.com/rss".into(),
+                    title: "Example Blog".into(),
+                    description: "A blog about things".into(),
+                },
+                vec![],
+            ))
+        }
+    }
+
+    fn mock_core() -> Core<MockStore, MockFetcher> {
+        Core::new(MockStore::default(), MockFetcher {})
     }
 
     #[tokio::test]
