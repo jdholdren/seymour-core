@@ -11,9 +11,9 @@ pub struct Feed {
     pub url: String,
     pub title: Option<String>,
     pub description: Option<String>,
-    pub last_synced_at: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
+    pub last_synced_at: Option<u64>,
+    pub created_at: u64,
+    pub updated_at: u64,
 }
 
 #[allow(async_fn_in_trait)]
@@ -22,6 +22,7 @@ pub trait Storage {
     async fn add_feed(&self, url: String) -> Result<Feed, Error>;
     fn get_feed(&self, id: &str) -> Result<Feed, Error>;
     fn list_entries(&self, feed_id: &str) -> Result<Vec<FeedEntry>, Error>;
+    fn update_feed(&self, feed_id: &str, remote: &RemoteFeed, entries: &[RemoteEntry]) -> Result<(), Error>;
 }
 
 /// FeedEntry is the representation of a post from a feed.
@@ -33,8 +34,8 @@ pub struct FeedEntry {
     pub description: String,
     pub guid: String,
     pub link: String,
-    pub created_at: String,
-    pub publish_time: Option<String>,
+    pub created_at: u64,
+    pub publish_time: Option<u64>,
 }
 
 /// RemoteFeed is the representation of the feed's details from the server.
@@ -102,14 +103,14 @@ impl From<rusqlite::Error> for Error {
 /// FFI boundaries.
 pub struct Core<S, F> {
     store: Mutex<S>,
-    _fetcher: F,
+    fetcher: F,
 }
 
 impl<S: Storage, F: Fetcher> Core<S, F> {
     pub fn new(store: S, fetcher: F) -> Self {
         Self {
             store: Mutex::new(store),
-            _fetcher: fetcher,
+            fetcher,
         }
     }
 
@@ -118,7 +119,16 @@ impl<S: Storage, F: Fetcher> Core<S, F> {
     }
 
     pub async fn add_feed(&self, url: String) -> Result<Feed, Error> {
-        self.store.lock().unwrap().add_feed(url).await
+        let (remote_feed, remote_entries) = self.fetcher.fetch(&url).await?;
+
+        let feed = self.store.lock().unwrap().add_feed(url).await?;
+
+        self.store
+            .lock()
+            .unwrap()
+            .update_feed(&feed.id, &remote_feed, &remote_entries)?;
+
+        Ok(feed)
     }
 
     pub fn get_feed(&self, id: &str) -> Result<Feed, Error> {

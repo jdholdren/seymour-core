@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use rusqlite::Connection;
 
-use crate::{Error, Feed, FeedEntry, Storage};
+use crate::{Error, Feed, FeedEntry, RemoteEntry, RemoteFeed, Storage};
 
 /// Store implementes all of the methods against a sqlite3 connection.
 ///
@@ -61,9 +61,9 @@ impl Storage for Store {
                     url: row.get(1)?,
                     title: row.get(2)?,
                     description: row.get(3)?,
-                    last_synced_at: row.get(4)?,
-                    created_at: row.get(5)?,
-                    updated_at: row.get(6)?,
+                    last_synced_at: row.get::<_, Option<i64>>(4)?.map(|v| v as u64),
+                    created_at: row.get::<_, i64>(5)? as u64,
+                    updated_at: row.get::<_, i64>(6)? as u64,
                 })
             },
         ).map_err(|err| err.into())
@@ -80,9 +80,9 @@ impl Storage for Store {
                         url: row.get(1)?,
                         title: row.get(2)?,
                         description: row.get(3)?,
-                        last_synced_at: row.get(4)?,
-                        created_at: row.get(5)?,
-                        updated_at: row.get(6)?,
+                        last_synced_at: row.get::<_, Option<i64>>(4)?.map(|v| v as u64),
+                        created_at: row.get::<_, i64>(5)? as u64,
+                        updated_at: row.get::<_, i64>(6)? as u64,
                     })
                 },
             )
@@ -104,12 +104,29 @@ impl Storage for Store {
                 description: row.get(3)?,
                 guid: row.get(4)?,
                 link: row.get(5)?,
-                created_at: row.get(6)?,
-                publish_time: row.get(7)?,
+                created_at: row.get::<_, i64>(6)? as u64,
+                publish_time: row.get::<_, Option<i64>>(7)?.map(|v| v as u64),
             })
         })?;
 
         Ok(entry_iter.map(|e| e.unwrap()).collect())
+    }
+
+    fn update_feed(&self, feed_id: &str, remote: &RemoteFeed, entries: &[RemoteEntry]) -> Result<(), Error> {
+        self.conn.execute(
+            "UPDATE feeds SET title = ?1, description = ?2, last_synced_at = unixepoch() WHERE id = ?3",
+            rusqlite::params![remote.title, remote.description, feed_id],
+        )?;
+
+        for entry in entries {
+            let id = uuid::Uuid::new_v4().to_string();
+            self.conn.execute(
+                "INSERT OR IGNORE INTO feed_entries (id, feed_id, title, description, guid, link, publish_time) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![id, feed_id, entry.title, entry.description, entry.guid, entry.link, entry.publish_time_unix_secs.map(|s| s as i64)],
+            )?;
+        }
+
+        Ok(())
     }
 
     /// Lists all feeds tracked within the store.
@@ -123,9 +140,9 @@ impl Storage for Store {
                 url: row.get(1)?,
                 title: row.get(2)?,
                 description: row.get(3)?,
-                last_synced_at: row.get(4)?,
-                created_at: row.get(5)?,
-                updated_at: row.get(6)?,
+                last_synced_at: row.get::<_, Option<i64>>(4)?.map(|v| v as u64),
+                created_at: row.get::<_, i64>(5)? as u64,
+                updated_at: row.get::<_, i64>(6)? as u64,
             })
         })?;
 
@@ -142,9 +159,9 @@ const MIGRATIONS_SLICE: &[M<'_>] = &[
             url TEXT NOT NULL UNIQUE,
             title TEXT,
             description TEXT,
-            last_synced_at DATETIME,
-            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            last_synced_at INTEGER,
+            created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+            updated_at INTEGER NOT NULL DEFAULT (unixepoch())
         );",
     ),
     M::up(
@@ -154,8 +171,8 @@ const MIGRATIONS_SLICE: &[M<'_>] = &[
             title TEXT NOT NULL,
             description TEXT NOT NULL,
             guid TEXT NOT NULL UNIQUE,
-            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            publish_time DATETIME NULL,
+            created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+            publish_time INTEGER NULL,
             link VARCHAR(256) NOT NULL
         );",
     ),
@@ -209,13 +226,13 @@ mod tests {
         store.conn.execute(
             "INSERT INTO feed_entries (id, feed_id, title, description, guid, link, publish_time) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             rusqlite::params![
-                "entry-1", &feed.id, "First Post", "Description 1", "guid-1", "https://example.com/1", "2026-01-02 00:00:00"
+                "entry-1", &feed.id, "First Post", "Description 1", "guid-1", "https://example.com/1", 1767312000i64 // 2026-01-02 00:00:00 UTC
             ],
         ).unwrap();
         store.conn.execute(
             "INSERT INTO feed_entries (id, feed_id, title, description, guid, link, publish_time) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             rusqlite::params![
-                "entry-2", &feed.id, "Second Post", "Description 2", "guid-2", "https://example.com/2", "2026-01-03 00:00:00"
+                "entry-2", &feed.id, "Second Post", "Description 2", "guid-2", "https://example.com/2", 1767398400i64 // 2026-01-03 00:00:00 UTC
             ],
         ).unwrap();
 
