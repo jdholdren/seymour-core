@@ -1,8 +1,23 @@
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
+use std::process::{Command, Stdio};
 
 use chrono::DateTime;
 use clap::{Parser, Subcommand};
 use seycore::{http::FeedFetcher, sqlite::Store, Core, Fetcher, Storage};
+
+fn with_pager(f: impl FnOnce(&mut dyn Write) -> anyhow::Result<()>) -> anyhow::Result<()> {
+    if io::stdout().is_terminal() {
+        let pager = std::env::var("PAGER").unwrap_or_else(|_| "less".to_string());
+        if let Ok(mut child) = Command::new(&pager).stdin(Stdio::piped()).spawn() {
+            let mut stdin = child.stdin.take().unwrap();
+            let result = f(&mut stdin);
+            drop(stdin); // close stdin so pager receives EOF
+            let _ = child.wait();
+            return result;
+        }
+    }
+    f(&mut io::stdout())
+}
 
 fn format_timestamp(ts: u64) -> String {
     DateTime::from_timestamp(ts as i64, 0)
@@ -27,9 +42,16 @@ enum Commands {
     /// Add a feed
     Add { url: String },
     /// List entries for a feed
-    Entries { feed_id: String },
+    Entries {
+        feed_id: String,
+        /// Show all entries, including unapproved
+        #[arg(long)]
+        all: bool,
+    },
     /// Sync all feeds
     SyncAll,
+    /// Show all approved entries across all feeds
+    Timeline,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -42,8 +64,9 @@ async fn main() -> anyhow::Result<()> {
         Commands::Feeds { id: Some(id) } => handle_describe_feed(&core, &id, io::stdout())?,
         Commands::Feeds { id: None } => handle_list_feeds(&core, io::stdout())?,
         Commands::Add { url } => handle_add_feed(&core, url, io::stdout()).await?,
-        Commands::Entries { feed_id } => handle_list_entries(&core, &feed_id, io::stdout())?,
+        Commands::Entries { feed_id, all } => handle_list_entries(&core, &feed_id, all, io::stdout())?,
         Commands::SyncAll => handle_sync_all(&core, io::stdout()).await?,
+        Commands::Timeline => with_pager(|out| handle_timeline(&core, out))?,
     }
 
     Ok(())
@@ -103,6 +126,26 @@ async fn handle_add_feed<S: Storage, F: Fetcher>(
     Ok(())
 }
 
+fn handle_timeline<S: Storage, F: Fetcher>(
+    core: &Core<S, F>,
+    out: &mut dyn Write,
+) -> anyhow::Result<()> {
+    let entries = core.list_timeline()?;
+    let rows: Vec<Vec<String>> = entries
+        .iter()
+        .map(|(feed_name, e)| {
+            vec![
+                feed_name.clone(),
+                e.title.clone(),
+                e.publish_time.map(format_timestamp).unwrap_or_default(),
+                e.link.clone(),
+            ]
+        })
+        .collect();
+    write_table(&["Feed", "Title", "Published", "Link"], &rows, out)?;
+    Ok(())
+}
+
 async fn handle_sync_all<S: Storage, F: Fetcher>(
     core: &Core<S, F>,
     mut out: impl Write,
@@ -115,9 +158,10 @@ async fn handle_sync_all<S: Storage, F: Fetcher>(
 fn handle_list_entries<S: Storage, F: Fetcher>(
     core: &Core<S, F>,
     feed_id: &str,
+    fetch_all: bool,
     mut out: impl Write,
 ) -> anyhow::Result<()> {
-    let entries = core.list_entries(feed_id)?;
+    let entries = core.list_entries(feed_id, fetch_all)?;
     let rows: Vec<Vec<String>> = entries
         .iter()
         .map(|e| {
@@ -264,11 +308,19 @@ mod tests {
             }
         }
 
+        fn list_timeline(&self) -> Result<Vec<(String, FeedEntry)>, Error> {
+            Ok(self
+                .list_entries("00000000-0000-0000-0000-000000000001", false)?
+                .into_iter()
+                .map(|e| ("Example Blog".to_string(), e))
+                .collect())
+        }
+
         fn update_feed(&self, _feed_id: &str, _remote: &RemoteFeed, _entries: &[RemoteEntry]) -> Result<(), Error> {
             Ok(())
         }
 
-        fn list_entries(&self, feed_id: &str) -> Result<Vec<FeedEntry>, Error> {
+        fn list_entries(&self, feed_id: &str, _fetch_all: bool) -> Result<Vec<FeedEntry>, Error> {
             if feed_id == "00000000-0000-0000-0000-000000000001" {
                 Ok(vec![
                     FeedEntry {
@@ -280,6 +332,7 @@ mod tests {
                         link: "https://example.com/posts/1".into(),
                         created_at: 1768003200, // 2026-01-10 00:00:00 UTC
                         publish_time: Some(1768046400), // 2026-01-10 12:00:00 UTC
+                        approved: true,
                     },
                     FeedEntry {
                         id: "entry-0002".into(),
@@ -290,6 +343,7 @@ mod tests {
                         link: "https://example.com/posts/2".into(),
                         created_at: 1768089600, // 2026-01-11 00:00:00 UTC
                         publish_time: Some(1768120200), // 2026-01-11 08:30:00 UTC
+                        approved: true,
                     },
                 ])
             } else {
@@ -354,6 +408,7 @@ mod tests {
         handle_list_entries(
             &mock_core(),
             "00000000-0000-0000-0000-000000000001",
+            false,
             &mut buf,
         )
         .unwrap();
@@ -375,5 +430,13 @@ mod tests {
         handle_sync_all(&mock_core(), &mut buf).await.unwrap();
         let output = String::from_utf8(buf).unwrap();
         assert_eq!(output, golden("sync_all.txt"));
+    }
+
+    #[test]
+    fn timeline_output() {
+        let mut buf = Vec::new();
+        handle_timeline(&mock_core(), &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert_eq!(output, golden("timeline.txt"));
     }
 }

@@ -25,7 +25,11 @@ impl FFICore {
         self.0.get_feed(id)
     }
 
-    pub fn list_entries(&self, feed_id: &str) -> Result<Vec<FeedEntry>, Error> {
-        self.0.list_entries(feed_id)
+    pub fn list_entries(&self, feed_id: &str, fetch_all: bool) -> Result<Vec<FeedEntry>, Error> {
+        self.0.list_entries(feed_id, fetch_all)
+    }
+
+    pub fn list_timeline(&self) -> Result<Vec<(String, FeedEntry)>, Error> {
+        self.0.list_timeline()
     }
 }
