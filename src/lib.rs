@@ -1,5 +1,6 @@
 use std::fmt;
 
+pub mod http;
 pub mod sqlite;
 
 #[derive(Clone)]
@@ -17,6 +18,25 @@ pub trait Storage {
     fn list_feeds(&self) -> Result<Vec<Feed>, Error>;
     fn add_feed(&self, url: String) -> Result<Feed, Error>;
     fn get_feed(&self, id: &str) -> Result<Feed, Error>;
+    fn list_entries(&self, feed_id: &str) -> Result<Vec<FeedEntry>, Error>;
+}
+
+/// FeedEntry is the representation of a post from a feed.
+#[derive(Clone)]
+pub struct FeedEntry {
+    pub id: String,
+    pub feed_id: String,
+    pub title: String,
+    pub description: String,
+    pub guid: String,
+    pub link: String,
+    pub created_at: String,
+    pub publish_time: Option<String>,
+}
+
+/// Fetcher is surface for taking a url and fetching the feed and its entries.
+pub trait Fetcher {
+    async fn fetch(url: &str) -> Result<(Feed, Vec<FeedEntry>), Error>;
 }
 
 #[derive(Debug)]

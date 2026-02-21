@@ -1,0 +1,4 @@
+ID          Title        Published            Link
+----------  -----------  -------------------  ---------------------------
+entry-0001  First Post   2026-01-10 12:00:00  https://example.com/posts/1
+entry-0002  Second Post  2026-01-11 08:30:00  https://example.com/posts/2

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use rusqlite::Connection;
 
-use crate::{Error, Feed, Storage};
+use crate::{Error, Feed, FeedEntry, Storage};
 
 /// Store implementes all of the methods against a sqlite3 connection.
 ///
@@ -95,6 +95,26 @@ impl Storage for Store {
             })
     }
 
+    fn list_entries(&self, feed_id: &str) -> Result<Vec<FeedEntry>, Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, feed_id, title, description, guid, link, created_at, publish_time FROM feed_entries WHERE feed_id = ?1 ORDER BY publish_time DESC, created_at DESC"
+        )?;
+        let entry_iter = stmt.query_map([feed_id], |row| {
+            Ok(FeedEntry {
+                id: row.get(0)?,
+                feed_id: row.get(1)?,
+                title: row.get(2)?,
+                description: row.get(3)?,
+                guid: row.get(4)?,
+                link: row.get(5)?,
+                created_at: row.get(6)?,
+                publish_time: row.get(7)?,
+            })
+        })?;
+
+        Ok(entry_iter.map(|e| e.unwrap()).collect())
+    }
+
     /// Lists all feeds tracked within the store.
     fn list_feeds(&self) -> Result<Vec<Feed>, Error> {
         let mut stmt = self.conn.prepare(
@@ -170,5 +190,36 @@ mod tests {
         let fetched = store.get_feed(&added.id).unwrap();
         assert_eq!(fetched.id, added.id);
         assert_eq!(fetched.url, "https://example.com/rss");
+    }
+
+    #[test]
+    fn list_entries_returns_empty_for_unknown_feed() {
+        let store = Store::default();
+        let entries = store.list_entries("nonexistent-feed-id").unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn list_entries_returns_inserted_entries() {
+        let store = Store::default();
+        let feed = store.add_feed("https://example.com/rss".into()).unwrap();
+        store.conn.execute(
+            "INSERT INTO feed_entries (id, feed_id, title, description, guid, link, publish_time) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                "entry-1", &feed.id, "First Post", "Description 1", "guid-1", "https://example.com/1", "2026-01-02 00:00:00"
+            ],
+        ).unwrap();
+        store.conn.execute(
+            "INSERT INTO feed_entries (id, feed_id, title, description, guid, link, publish_time) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                "entry-2", &feed.id, "Second Post", "Description 2", "guid-2", "https://example.com/2", "2026-01-03 00:00:00"
+            ],
+        ).unwrap();
+
+        let entries = store.list_entries(&feed.id).unwrap();
+        assert_eq!(entries.len(), 2);
+        // Ordered by publish_time DESC
+        assert_eq!(entries[0].title, "Second Post");
+        assert_eq!(entries[1].title, "First Post");
     }
 }

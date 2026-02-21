@@ -19,6 +19,8 @@ enum Commands {
     },
     /// Add a feed
     Add { url: String },
+    /// List entries for a feed
+    Entries { feed_id: String },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -30,6 +32,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Feeds { id: Some(id) } => handle_describe_feed(&store, &id, io::stdout())?,
         Commands::Feeds { id: None } => handle_list_feeds(&store, io::stdout())?,
         Commands::Add { url } => handle_add_feed(&store, url, io::stdout())?,
+        Commands::Entries { feed_id } => handle_list_entries(&store, &feed_id, io::stdout())?,
     }
 
     Ok(())
@@ -77,6 +80,27 @@ fn handle_describe_feed(store: &impl Storage, id: &str, mut out: impl Write) -> 
 fn handle_add_feed(store: &impl Storage, url: String, mut out: impl Write) -> anyhow::Result<()> {
     let feed = store.add_feed(url)?;
     writeln!(out, "added feed {} ({})", feed.id, feed.url)?;
+    Ok(())
+}
+
+fn handle_list_entries(
+    store: &impl Storage,
+    feed_id: &str,
+    mut out: impl Write,
+) -> anyhow::Result<()> {
+    let entries = store.list_entries(feed_id)?;
+    let rows: Vec<Vec<String>> = entries
+        .iter()
+        .map(|e| {
+            vec![
+                e.id.clone(),
+                e.title.clone(),
+                e.publish_time.clone().unwrap_or_default(),
+                e.link.clone(),
+            ]
+        })
+        .collect();
+    write_table(&["ID", "Title", "Published", "Link"], &rows, &mut out)?;
     Ok(())
 }
 
@@ -157,7 +181,7 @@ fn write_table(headers: &[&str], rows: &[Vec<String>], mut out: impl Write) -> i
 #[cfg(test)]
 mod tests {
     use super::*;
-    use seycore::{Error, Feed};
+    use seycore::{Error, Feed, FeedEntry};
     use std::path::PathBuf;
 
     struct MockStore {
@@ -209,6 +233,35 @@ mod tests {
                 _ => Err(Error::NotFound),
             }
         }
+
+        fn list_entries(&self, feed_id: &str) -> Result<Vec<FeedEntry>, Error> {
+            if feed_id == "00000000-0000-0000-0000-000000000001" {
+                Ok(vec![
+                    FeedEntry {
+                        id: "entry-0001".into(),
+                        feed_id: feed_id.into(),
+                        title: "First Post".into(),
+                        description: "Description of first post".into(),
+                        guid: "guid-0001".into(),
+                        link: "https://example.com/posts/1".into(),
+                        created_at: "2026-01-10 00:00:00".into(),
+                        publish_time: Some("2026-01-10 12:00:00".into()),
+                    },
+                    FeedEntry {
+                        id: "entry-0002".into(),
+                        feed_id: feed_id.into(),
+                        title: "Second Post".into(),
+                        description: "Description of second post".into(),
+                        guid: "guid-0002".into(),
+                        link: "https://example.com/posts/2".into(),
+                        created_at: "2026-01-11 00:00:00".into(),
+                        publish_time: Some("2026-01-11 08:30:00".into()),
+                    },
+                ])
+            } else {
+                Ok(vec![])
+            }
+        }
     }
 
     fn golden(name: &str) -> String {
@@ -243,6 +296,19 @@ mod tests {
         .unwrap();
         let output = String::from_utf8(buf).unwrap();
         assert_eq!(output, golden("describe_feed.txt"));
+    }
+
+    #[test]
+    fn list_entries_output() {
+        let mut buf = Vec::new();
+        handle_list_entries(
+            &MockStore::default(),
+            "00000000-0000-0000-0000-000000000001",
+            &mut buf,
+        )
+        .unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert_eq!(output, golden("list_entries.txt"));
     }
 
     #[test]
