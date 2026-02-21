@@ -1,7 +1,7 @@
 use std::io::{self, Write};
 
 use clap::{Parser, Subcommand};
-use seycore::{sqlite::Store, Storage};
+use seycore::{http::FeedFetcher, sqlite::Store, Core, Fetcher, Storage};
 
 #[derive(Parser)]
 #[command(name = "seymour")]
@@ -23,16 +23,17 @@ enum Commands {
     Entries { feed_id: String },
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    let store = Store::new()?;
+    let core = Core::new(Store::new()?, FeedFetcher {});
 
     match cli.command {
-        Commands::Feeds { id: Some(id) } => handle_describe_feed(&store, &id, io::stdout())?,
-        Commands::Feeds { id: None } => handle_list_feeds(&store, io::stdout())?,
-        Commands::Add { url } => handle_add_feed(&store, url, io::stdout())?,
-        Commands::Entries { feed_id } => handle_list_entries(&store, &feed_id, io::stdout())?,
+        Commands::Feeds { id: Some(id) } => handle_describe_feed(&core, &id, io::stdout())?,
+        Commands::Feeds { id: None } => handle_list_feeds(&core, io::stdout())?,
+        Commands::Add { url } => handle_add_feed(&core, url, io::stdout()).await?,
+        Commands::Entries { feed_id } => handle_list_entries(&core, &feed_id, io::stdout())?,
     }
 
     Ok(())
@@ -49,8 +50,12 @@ fn main() -> anyhow::Result<()> {
 ///      Created: 2026-02-15 08:30:00
 ///      Updated: 2026-02-16 12:00:00
 /// ```
-fn handle_describe_feed(store: &impl Storage, id: &str, mut out: impl Write) -> anyhow::Result<()> {
-    let feed = store.get_feed(id)?;
+fn handle_describe_feed<S: Storage, F: Fetcher>(
+    core: &Core<S, F>,
+    id: &str,
+    mut out: impl Write,
+) -> anyhow::Result<()> {
+    let feed = core.get_feed(id)?;
     let none = "—".to_string();
     writeln!(out, "{:>12}: {}", "ID", feed.id)?;
     writeln!(out, "{:>12}: {}", "URL", feed.url)?;
@@ -77,18 +82,22 @@ fn handle_describe_feed(store: &impl Storage, id: &str, mut out: impl Write) -> 
     Ok(())
 }
 
-fn handle_add_feed(store: &impl Storage, url: String, mut out: impl Write) -> anyhow::Result<()> {
-    let feed = store.add_feed(url)?;
+async fn handle_add_feed<S: Storage, F: Fetcher>(
+    core: &Core<S, F>,
+    url: String,
+    mut out: impl Write,
+) -> anyhow::Result<()> {
+    let feed = core.add_feed(url).await?;
     writeln!(out, "added feed {} ({})", feed.id, feed.url)?;
     Ok(())
 }
 
-fn handle_list_entries(
-    store: &impl Storage,
+fn handle_list_entries<S: Storage, F: Fetcher>(
+    core: &Core<S, F>,
     feed_id: &str,
     mut out: impl Write,
 ) -> anyhow::Result<()> {
-    let entries = store.list_entries(feed_id)?;
+    let entries = core.list_entries(feed_id)?;
     let rows: Vec<Vec<String>> = entries
         .iter()
         .map(|e| {
@@ -104,8 +113,11 @@ fn handle_list_entries(
     Ok(())
 }
 
-fn handle_list_feeds(store: &impl Storage, mut out: impl Write) -> anyhow::Result<()> {
-    let feeds = store.list_feeds()?;
+fn handle_list_feeds<S: Storage, F: Fetcher>(
+    core: &Core<S, F>,
+    mut out: impl Write,
+) -> anyhow::Result<()> {
+    let feeds = core.list_feeds()?;
     let rows: Vec<Vec<String>> = feeds
         .iter()
         .map(|f| vec![f.id.clone(), f.url.clone()])
@@ -220,7 +232,7 @@ mod tests {
             Ok(self.feeds.clone())
         }
 
-        fn add_feed(&self, url: String) -> Result<Feed, Error> {
+        async fn add_feed(&self, url: String) -> Result<Feed, Error> {
             Ok(Feed {
                 url,
                 ..self.feeds.first().unwrap().clone()
@@ -272,15 +284,16 @@ mod tests {
             .unwrap_or_else(|e| panic!("failed to read golden file {}: {e}", path.display()))
     }
 
-    #[test]
-    fn add_feed_output() {
+    fn mock_core() -> Core<MockStore, FeedFetcher> {
+        Core::new(MockStore::default(), FeedFetcher {})
+    }
+
+    #[tokio::test]
+    async fn add_feed_output() {
         let mut buf = Vec::new();
-        handle_add_feed(
-            &MockStore::default(),
-            "https://example.com/rss".into(),
-            &mut buf,
-        )
-        .unwrap();
+        handle_add_feed(&mock_core(), "https://example.com/rss".into(), &mut buf)
+            .await
+            .unwrap();
         let output = String::from_utf8(buf).unwrap();
         assert_eq!(output, golden("add_feed.txt"));
     }
@@ -289,7 +302,7 @@ mod tests {
     fn describe_feed_output() {
         let mut buf = Vec::new();
         handle_describe_feed(
-            &MockStore::default(),
+            &mock_core(),
             "00000000-0000-0000-0000-000000000001",
             &mut buf,
         )
@@ -302,7 +315,7 @@ mod tests {
     fn list_entries_output() {
         let mut buf = Vec::new();
         handle_list_entries(
-            &MockStore::default(),
+            &mock_core(),
             "00000000-0000-0000-0000-000000000001",
             &mut buf,
         )
@@ -314,7 +327,7 @@ mod tests {
     #[test]
     fn list_feeds_output() {
         let mut buf = Vec::new();
-        handle_list_feeds(&MockStore::default(), &mut buf).unwrap();
+        handle_list_feeds(&mock_core(), &mut buf).unwrap();
         let output = String::from_utf8(buf).unwrap();
         assert_eq!(output, golden("list_feeds.txt"));
     }

@@ -16,18 +16,6 @@ pub struct Store {
     conn: Connection,
 }
 
-impl Default for Store {
-    /// Creates an implementation of Store that talks to an in-memory sqlite.
-    fn default() -> Self {
-        let mut conn =
-            Connection::open_in_memory().expect("error opening in-memory sqlite connection");
-        MIGRATIONS
-            .to_latest(&mut conn)
-            .expect("failed to run migrations");
-        Self { conn }
-    }
-}
-
 impl Store {
     // Creates an instace of the storage that is backed by .seymour/data.sqlite3.
     pub fn new() -> Result<Self, Error> {
@@ -47,10 +35,19 @@ impl Store {
 
         Ok(Self { conn })
     }
+
+    pub fn new_in_memory() -> Self {
+        let mut conn =
+            Connection::open_in_memory().expect("error opening in-memory sqlite connection");
+        MIGRATIONS
+            .to_latest(&mut conn)
+            .expect("failed to run migrations");
+        Self { conn }
+    }
 }
 
 impl Storage for Store {
-    fn add_feed(&self, url: String) -> Result<Feed, Error> {
+    async fn add_feed(&self, url: String) -> Result<Feed, Error> {
         let id = uuid::Uuid::new_v4().to_string();
         self.conn
             .execute("INSERT INTO feeds (id, url) VALUES (?1, ?2)", [&id, &url])?;
@@ -171,22 +168,25 @@ mod tests {
 
     #[test]
     fn list_feeds_returns_empty_list() {
-        let store = Store::default();
+        let store = Store::new_in_memory();
         let feeds = store.list_feeds().unwrap();
         assert!(feeds.is_empty());
     }
 
     #[test]
     fn get_feed_returns_not_found() {
-        let store = Store::default();
+        let store = Store::new_in_memory();
         let result = store.get_feed("nonexistent-id");
         assert!(matches!(result, Err(Error::NotFound)));
     }
 
-    #[test]
-    fn get_feed_returns_inserted_feed() {
-        let store = Store::default();
-        let added = store.add_feed("https://example.com/rss".into()).unwrap();
+    #[tokio::test]
+    async fn get_feed_returns_inserted_feed() {
+        let store = Store::new_in_memory();
+        let added = store
+            .add_feed("https://example.com/rss".into())
+            .await
+            .unwrap();
         let fetched = store.get_feed(&added.id).unwrap();
         assert_eq!(fetched.id, added.id);
         assert_eq!(fetched.url, "https://example.com/rss");
@@ -194,15 +194,18 @@ mod tests {
 
     #[test]
     fn list_entries_returns_empty_for_unknown_feed() {
-        let store = Store::default();
+        let store = Store::new_in_memory();
         let entries = store.list_entries("nonexistent-feed-id").unwrap();
         assert!(entries.is_empty());
     }
 
-    #[test]
-    fn list_entries_returns_inserted_entries() {
-        let store = Store::default();
-        let feed = store.add_feed("https://example.com/rss".into()).unwrap();
+    #[tokio::test]
+    async fn list_entries_returns_inserted_entries() {
+        let store = Store::new_in_memory();
+        let feed = store
+            .add_feed("https://example.com/rss".into())
+            .await
+            .unwrap();
         store.conn.execute(
             "INSERT INTO feed_entries (id, feed_id, title, description, guid, link, publish_time) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             rusqlite::params![
