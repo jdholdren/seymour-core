@@ -131,6 +131,18 @@ impl<S: Storage, F: Fetcher> Core<S, F> {
         Ok(feed)
     }
 
+    pub async fn sync_all(&self) -> Result<(), Error> {
+        let feeds = self.store.lock().unwrap().list_feeds()?;
+        for feed in feeds {
+            let (remote_feed, remote_entries) = self.fetcher.fetch(&feed.url).await?;
+            self.store
+                .lock()
+                .unwrap()
+                .update_feed(&feed.id, &remote_feed, &remote_entries)?;
+        }
+        Ok(())
+    }
+
     pub fn get_feed(&self, id: &str) -> Result<Feed, Error> {
         self.store.lock().unwrap().get_feed(id)
     }
