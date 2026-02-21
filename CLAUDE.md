@@ -2,6 +2,21 @@
 
 RSS feed syncing and fetching core library, part of the Seymour project.
 
+## Code organization
+
+```
+src/
+  lib.rs      — Public API: Feed struct, Storage trait, Error enum
+  main.rs     — CLI binary (clap): command handlers, table formatting, MockStore + golden tests
+  sqlite.rs   — SQLite Storage implementation (Store), migrations
+testdata/     — Golden file expected outputs for CLI tests
+Cargo.toml    — Crate config; two binaries (cli, uniffi-bindgen) + a library (cdylib/staticlib/lib)
+```
+
+- `lib.rs` defines the `Storage` trait that `sqlite::Store` implements. CLI handlers are generic over `impl Storage`.
+- `sqlite.rs` uses `rusqlite` + `rusqlite_migration`. `Store::new()` persists to `~/.seymour/data.sqlite3`; `Store::default()` uses an in-memory DB for unit tests.
+- `main.rs` contains all CLI command handlers and the `write_table` utility. Tests live in a `#[cfg(test)]` module at the bottom.
+
 ## CLI command pattern
 
 Each CLI command handler should accept an `impl Write` parameter for output instead of writing directly to stdout. In `main()`, pass `io::stdout()`. This makes commands testable by passing a `Vec<u8>` buffer in tests.
