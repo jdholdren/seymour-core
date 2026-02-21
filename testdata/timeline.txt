@@ -1,0 +1,4 @@
+Feed          Title        Published            Link
+------------  -----------  -------------------  ---------------------------
+Example Blog  First Post   2026-01-10 12:00:00  https://example.com/posts/1
+Example Blog  Second Post  2026-01-11 08:30:00  https://example.com/posts/2

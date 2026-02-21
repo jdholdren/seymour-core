@@ -21,7 +21,8 @@ pub trait Storage {
     fn list_feeds(&self) -> Result<Vec<Feed>, Error>;
     async fn add_feed(&self, url: String) -> Result<Feed, Error>;
     fn get_feed(&self, id: &str) -> Result<Feed, Error>;
-    fn list_entries(&self, feed_id: &str) -> Result<Vec<FeedEntry>, Error>;
+    fn list_entries(&self, feed_id: &str, fetch_all: bool) -> Result<Vec<FeedEntry>, Error>;
+    fn list_timeline(&self) -> Result<Vec<(String, FeedEntry)>, Error>;
     fn update_feed(&self, feed_id: &str, remote: &RemoteFeed, entries: &[RemoteEntry]) -> Result<(), Error>;
 }
 
@@ -36,6 +37,7 @@ pub struct FeedEntry {
     pub link: String,
     pub created_at: u64,
     pub publish_time: Option<u64>,
+    pub approved: bool,
 }
 
 /// RemoteFeed is the representation of the feed's details from the server.
@@ -147,7 +149,11 @@ impl<S: Storage, F: Fetcher> Core<S, F> {
         self.store.lock().unwrap().get_feed(id)
     }
 
-    pub fn list_entries(&self, feed_id: &str) -> Result<Vec<FeedEntry>, Error> {
-        self.store.lock().unwrap().list_entries(feed_id)
+    pub fn list_entries(&self, feed_id: &str, fetch_all: bool) -> Result<Vec<FeedEntry>, Error> {
+        self.store.lock().unwrap().list_entries(feed_id, fetch_all)
+    }
+
+    pub fn list_timeline(&self) -> Result<Vec<(String, FeedEntry)>, Error> {
+        self.store.lock().unwrap().list_timeline()
     }
 }

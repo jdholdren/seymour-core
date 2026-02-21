@@ -92,10 +92,13 @@ impl Storage for Store {
             })
     }
 
-    fn list_entries(&self, feed_id: &str) -> Result<Vec<FeedEntry>, Error> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, feed_id, title, description, guid, link, created_at, publish_time FROM feed_entries WHERE feed_id = ?1 ORDER BY publish_time DESC, created_at DESC"
-        )?;
+    fn list_entries(&self, feed_id: &str, fetch_all: bool) -> Result<Vec<FeedEntry>, Error> {
+        let sql = if fetch_all {
+            "SELECT id, feed_id, title, description, guid, link, created_at, publish_time, approved FROM feed_entries WHERE feed_id = ?1 ORDER BY publish_time DESC, created_at DESC"
+        } else {
+            "SELECT id, feed_id, title, description, guid, link, created_at, publish_time, approved FROM feed_entries WHERE feed_id = ?1 AND approved = 1 ORDER BY publish_time DESC, created_at DESC"
+        };
+        let mut stmt = self.conn.prepare(sql)?;
         let entry_iter = stmt.query_map([feed_id], |row| {
             Ok(FeedEntry {
                 id: row.get(0)?,
@@ -106,7 +109,35 @@ impl Storage for Store {
                 link: row.get(5)?,
                 created_at: row.get::<_, i64>(6)? as u64,
                 publish_time: row.get::<_, Option<i64>>(7)?.map(|v| v as u64),
+                approved: row.get::<_, i64>(8)? != 0,
             })
+        })?;
+
+        Ok(entry_iter.map(|e| e.unwrap()).collect())
+    }
+
+    fn list_timeline(&self) -> Result<Vec<(String, FeedEntry)>, Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT fe.id, fe.feed_id, fe.title, fe.description, fe.guid, fe.link, fe.created_at, fe.publish_time, fe.approved, COALESCE(f.title, f.url) as feed_name
+             FROM feed_entries fe
+             JOIN feeds f ON f.id = fe.feed_id
+             WHERE fe.approved = 1
+             ORDER BY fe.publish_time DESC, fe.created_at DESC"
+        )?;
+        let entry_iter = stmt.query_map([], |row| {
+            let entry = FeedEntry {
+                id: row.get(0)?,
+                feed_id: row.get(1)?,
+                title: row.get(2)?,
+                description: row.get(3)?,
+                guid: row.get(4)?,
+                link: row.get(5)?,
+                created_at: row.get::<_, i64>(6)? as u64,
+                publish_time: row.get::<_, Option<i64>>(7)?.map(|v| v as u64),
+                approved: row.get::<_, i64>(8)? != 0,
+            };
+            let feed_name: String = row.get(9)?;
+            Ok((feed_name, entry))
         })?;
 
         Ok(entry_iter.map(|e| e.unwrap()).collect())
@@ -121,7 +152,7 @@ impl Storage for Store {
         for entry in entries {
             let id = uuid::Uuid::new_v4().to_string();
             self.conn.execute(
-                "INSERT OR IGNORE INTO feed_entries (id, feed_id, title, description, guid, link, publish_time) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT OR IGNORE INTO feed_entries (id, feed_id, title, description, guid, link, publish_time, approved) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)",
                 rusqlite::params![id, feed_id, entry.title, entry.description, entry.guid, entry.link, entry.publish_time_unix_secs.map(|s| s as i64)],
             )?;
         }
@@ -173,8 +204,11 @@ const MIGRATIONS_SLICE: &[M<'_>] = &[
             guid TEXT NOT NULL UNIQUE,
             created_at INTEGER NOT NULL DEFAULT (unixepoch()),
             publish_time INTEGER NULL,
-            link VARCHAR(256) NOT NULL
-        );",
+            link VARCHAR(256) NOT NULL,
+            approved INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE INDEX feed_entries_feed_id ON feed_entries (feed_id);
+        CREATE INDEX feed_entries_approved ON feed_entries (approved);",
     ),
 ];
 const MIGRATIONS: Migrations<'_> = Migrations::from_slice(MIGRATIONS_SLICE);
@@ -212,7 +246,7 @@ mod tests {
     #[test]
     fn list_entries_returns_empty_for_unknown_feed() {
         let store = Store::new_in_memory();
-        let entries = store.list_entries("nonexistent-feed-id").unwrap();
+        let entries = store.list_entries("nonexistent-feed-id", false).unwrap();
         assert!(entries.is_empty());
     }
 
@@ -236,7 +270,7 @@ mod tests {
             ],
         ).unwrap();
 
-        let entries = store.list_entries(&feed.id).unwrap();
+        let entries = store.list_entries(&feed.id, false).unwrap();
         assert_eq!(entries.len(), 2);
         // Ordered by publish_time DESC
         assert_eq!(entries[0].title, "Second Post");
