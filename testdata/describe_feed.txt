@@ -1,0 +1,7 @@
+          ID: 00000000-0000-0000-0000-000000000001
+         URL: https://example.com/rss
+       Title: Example Blog
+ Description: A blog about things
+ Last Synced: —
+     Created: 2026-01-01 00:00:00
+     Updated: 2026-01-01 00:00:00
