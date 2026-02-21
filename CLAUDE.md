@@ -50,3 +50,12 @@ assert_eq!(output, golden("something.txt"));
 ```
 
 When a handler's output format changes, update the corresponding file in `testdata/`. Golden files should match the handler output exactly, including trailing newlines.
+
+## Build and verification loop
+
+After making changes, always run this loop to verify correctness:
+
+1. `cargo build --bin cli` — ensure the project compiles
+2. `cargo test` — run all unit and golden file tests
+3. If golden file tests fail because of an intentional output change, run the CLI command manually (e.g. `cargo run --bin cli -- feeds`) and update the corresponding `testdata/*.txt` file with the new expected output
+4. If adding a new CLI command, build and run it with `cargo run --bin cli -- <command> [args]` to smoke-test the output before writing the golden file
