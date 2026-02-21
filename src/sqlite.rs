@@ -50,7 +50,15 @@ impl Storage for Store {
     async fn add_feed(&self, url: String) -> Result<Feed, Error> {
         let id = uuid::Uuid::new_v4().to_string();
         self.conn
-            .execute("INSERT INTO feeds (id, url) VALUES (?1, ?2)", [&id, &url])?;
+            .execute("INSERT INTO feeds (id, url) VALUES (?1, ?2)", [&id, &url])
+            .map_err(|e| match e {
+                rusqlite::Error::SqliteFailure(ref err, _)
+                    if err.code == rusqlite::ErrorCode::ConstraintViolation =>
+                {
+                    Error::AlreadyExists
+                }
+                other => other.into(),
+            })?;
 
         self.conn.query_row(
             "SELECT id, url, title, description, last_synced_at, created_at, updated_at FROM feeds WHERE id = ?1",
@@ -229,6 +237,17 @@ mod tests {
         let store = Store::new_in_memory();
         let result = store.get_feed("nonexistent-id");
         assert!(matches!(result, Err(Error::NotFound)));
+    }
+
+    #[tokio::test]
+    async fn add_feed_returns_already_exists_for_duplicate_url() {
+        let store = Store::new_in_memory();
+        store
+            .add_feed("https://example.com/rss".into())
+            .await
+            .unwrap();
+        let result = store.add_feed("https://example.com/rss".into()).await;
+        assert!(matches!(result, Err(Error::AlreadyExists)));
     }
 
     #[tokio::test]

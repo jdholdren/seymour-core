@@ -65,6 +65,7 @@ pub trait Fetcher {
 #[derive(Debug)]
 pub enum Error {
     NotFound,
+    AlreadyExists,
     Io(std::io::Error),
     Internal(String),
 }
@@ -73,6 +74,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::NotFound => write!(f, "not found"),
+            Error::AlreadyExists => write!(f, "feed already exists"),
             Error::Io(err) => write!(f, "{err}"),
             Error::Internal(msg) => write!(f, "internal error: {msg}"),
         }
@@ -83,7 +85,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Error::Io(err) => Some(err),
-            _ => None,
+            Error::NotFound | Error::AlreadyExists | Error::Internal(_) => None,
         }
     }
 }
